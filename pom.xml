@@ -102,6 +102,7 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
     <wagon-ssh.version>1.0</wagon-ssh.version>
     <maven-clover2-plugin.version>3.3.0</maven-clover2-plugin.version>
     <maven-bundle-plugin.version>2.5.0</maven-bundle-plugin.version>
+    <leveldbjni.group>org.fusesource.leveldbjni</leveldbjni.group>
   </properties>
 
   <modules>
@@ -507,6 +508,18 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
           </plugin>
         </plugins>
       </build>
+    </profile>
+    <profile>
+      <id>aarch64</id>
+      <properties>
+        <leveldbjni.group>org.openlabtesting.leveldbjni</leveldbjni.group>
+      </properties>
+      <activation>
+        <os>
+          <family>linux</family>
+          <arch>aarch64</arch>
+        </os>
+      </activation>
     </profile>
   </profiles>
 </project>
