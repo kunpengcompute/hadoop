@@ -28,6 +28,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.text.DecimalFormat;
 import java.util.Collection;
 import java.util.Date;
@@ -430,17 +432,24 @@ public class TestDFSIO implements Tool {
                        String name, 
                        long totalSize // in bytes
                      ) throws IOException {
-      OutputStream out = (OutputStream)this.stream;
-      // write to the file
-      long nrRemaining;
-      for (nrRemaining = totalSize; nrRemaining > 0; nrRemaining -= bufferSize) {
-        int curSize = (bufferSize < nrRemaining) ? bufferSize : (int)nrRemaining;
-        out.write(buffer, 0, curSize);
-        reporter.setStatus("writing " + name + "@" + 
-                           (totalSize - nrRemaining) + "/" + totalSize 
-                           + " ::host = " + hostName);
-      }
-      return Long.valueOf(totalSize);
+	    OutputStream out = (OutputStream) this.stream;
+		// write to the file
+		long nrRemaining;
+		byte[] ioTestData = getIoTestDataFromLocal();
+		long delta = Math.min(totalSize, ioTestData.length);
+		for (nrRemaining = totalSize; nrRemaining > 0; nrRemaining -= delta) {
+			long curSize = (delta < nrRemaining) ? delta : (int) nrRemaining;
+			out.write(ioTestData, 0, (int) curSize);
+			reporter.setStatus("writing " + name + "@" +
+				(totalSize - nrRemaining) + "/" + totalSize
+				+ " ::host = " + hostName);
+       }
+       return Long.valueOf(totalSize);
+    }
+
+    private byte[] getIoTestDataFromLocal() throws IOException {
+       java.nio.file.Path path = Paths.get("/usr/local/hadoop/testFiles/test_io_file");
+       return Files.readAllBytes(path);
     }
   }
 
