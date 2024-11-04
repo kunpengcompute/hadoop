@@ -38,6 +38,12 @@
 #ifndef _ISAL_LOAD_H_
 #define _ISAL_LOAD_H_
 
+#include <ksal_erasure_code.h>
+enum erasurecode_lib_type {
+	ERASURECODE_LIB_ISAL = 0,
+	ERASURECODE_LIB_KSAL = 1,
+	ERASURECODE_LIB_LAST
+};
 
 #ifdef UNIX
 // For gf_util.h
@@ -54,6 +60,8 @@ typedef void (*__d_ec_encode_data)(int, int, int, unsigned char*,
                                           unsigned char**, unsigned char**);
 typedef void (*__d_ec_encode_data_update)(int, int, int, int, unsigned char*,
                                              unsigned char*, unsigned char**);
+typedef void (*__KsalEcEncode)(uint8_t **, uint8_t **, struct HecParam *);
+typedef void (*__KsalEcDecode)(uint8_t **, uint8_t **, struct HecParam *);
 #endif
 
 #ifdef WINDOWS
@@ -91,7 +99,18 @@ typedef struct __IsaLibLoader {
   __d_ec_encode_data_update ec_encode_data_update;
 } IsaLibLoader;
 
+typedef struct __KsaLibLoader {
+  // The loaded library handle
+  void* libec;
+  char* libname;
+
+  __KsalEcEncode KsalEcEncode;
+  __KsalEcDecode KsalEcDecode;
+} KsaLibLoader;
+
 extern IsaLibLoader* isaLoader;
+extern KsaLibLoader* ksaLoader;
+extern enum erasurecode_lib_type g_erasurecode_lib_type;
 
 /**
  * A helper function to dlsym a 'symbol' from a given library-handle.
@@ -112,6 +131,11 @@ void *myDlsym(void *handle, const char *symbol) {
   }
 
 #endif
+
+#define EC_LOAD_KSAL_DYNAMIC_SYMBOL(func_ptr, symbol) \
+  if ((func_ptr = myDlsym(ksaLoader->libec, symbol)) == NULL) { \
+    return "Failed to load symbol" symbol; \
+  }
 
 #ifdef WINDOWS
 
@@ -141,5 +165,20 @@ int build_support_erasurecode();
  * @param err_len The length of the message buffer.
  */
 void load_erasurecode_lib(char* err, size_t err_len);
+
+/**
+ * 设置使用的纠删码库类型
+ * @param type 纠删码库类型枚举
+ *
+ * 此函数用于设置使用的纠删码库类型，可以根据需要选择不同的纠删码库。
+ */
+void set_erasurecode_lib(enum erasurecode_lib_type type);
+
+/**
+ * 获取当前使用的纠删码库类型
+ *
+ * @return 返回当前使用的纠删码库类型
+ */
+enum erasurecode_lib_type get_erasurecode_lib(void);
 
 #endif //_ISAL_LOAD_H_

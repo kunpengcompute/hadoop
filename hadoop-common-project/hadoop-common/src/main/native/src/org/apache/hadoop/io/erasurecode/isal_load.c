@@ -37,6 +37,13 @@
 #endif
 
 IsaLibLoader* isaLoader;
+KsaLibLoader* ksaLoader;
+enum erasurecode_lib_type g_erasurecode_lib_type;
+
+#define PRINT_MACRO_HELPER(x)   #x
+#define PRINT_MACRO(x)   #x "=" PRINT_MACRO_HELPER(x)
+#pragma message(PRINT_MACRO(HADOOP_ISAL_LIBRARY))
+#pragma message(PRINT_MACRO(HADOOP_KSAL_LIBRARY))
 
 /**
  *  isal_load.c
@@ -76,7 +83,14 @@ static const char* load_functions() {
   return NULL;
 }
 
-void load_erasurecode_lib(char* err, size_t err_len) {
+static const char* load_ksal_functions() {
+  EC_LOAD_KSAL_DYNAMIC_SYMBOL((ksaLoader->KsalEcEncode), "KsalEcEncode");
+  EC_LOAD_KSAL_DYNAMIC_SYMBOL((ksaLoader->KsalEcDecode), "KsalEcDecode");
+
+  return NULL;
+}
+
+void load_erasurecode_isal_lib(char* err, size_t err_len) {
   const char* errMsg;
   const char* library = NULL;
 #ifdef UNIX
@@ -133,6 +147,62 @@ void load_erasurecode_lib(char* err, size_t err_len) {
   }
 
   isaLoader->libname = strdup(library);
+}
+
+void load_erasurecode_ksal_lib(char *err, size_t err_len)
+{
+  const char *errMsg;
+  const char *library = NULL;
+  Dl_info dl_info;
+
+  err[0] = '\0';
+
+  if (ksaLoader != NULL) {
+    return;
+  }
+  ksaLoader = calloc(1, sizeof(KsaLibLoader));
+  memset(ksaLoader, 0, sizeof(KsaLibLoader));
+
+  // Load Kunpeng KSAL
+  ksaLoader->libec = dlopen(HADOOP_KSAL_LIBRARY, RTLD_LAZY | RTLD_GLOBAL);
+  if (ksaLoader->libec == NULL) {
+    snprintf(err, err_len, "Failed to load %s (%s)", HADOOP_KSAL_LIBRARY, dlerror());
+    return;
+  }
+  // Clear any existing error
+  dlerror();
+
+  errMsg = load_ksal_functions(ksaLoader->libec);
+  if (errMsg != NULL) {
+    snprintf(err, err_len, "Loading functions from KSAL failed: %s", errMsg);
+  }
+
+  if (dladdr(ksaLoader->KsalEcEncode, &dl_info)) {
+    library = dl_info.dli_fname;
+  }
+
+  if (library == NULL) {
+    library = HADOOP_KSAL_LIBRARY;
+  }
+
+  ksaLoader->libname = strdup(library);
+  set_erasurecode_lib(ERASURECODE_LIB_KSAL);
+}
+
+void load_erasurecode_lib(char* err, size_t err_len)
+{
+  load_erasurecode_isal_lib(err, err_len);
+  load_erasurecode_ksal_lib(err, err_len);
+}
+
+void set_erasurecode_lib(enum erasurecode_lib_type type)
+{
+  g_erasurecode_lib_type = type;
+}
+
+enum erasurecode_lib_type get_erasurecode_lib(void)
+{
+  return g_erasurecode_lib_type;
 }
 
 int build_support_erasurecode() {

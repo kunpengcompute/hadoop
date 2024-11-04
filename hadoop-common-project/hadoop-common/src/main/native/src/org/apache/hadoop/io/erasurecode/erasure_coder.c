@@ -19,6 +19,7 @@
 #include "erasure_code.h"
 #include "gf_util.h"
 #include "erasure_coder.h"
+#include "isal_load.h"
 #include "dump.h"
 
 #include <stdio.h>
@@ -67,7 +68,7 @@ void initDecoder(IsalDecoder* pCoder, int numDataUnits,
   initEncodeMatrix(numDataUnits, numParityUnits, pCoder->encodeMatrix);
 }
 
-int encode(IsalEncoder* pCoder, unsigned char** dataUnits,
+static int isal_encode(IsalEncoder* pCoder, unsigned char** dataUnits,
     unsigned char** parityUnits, int chunkSize) {
   int numDataUnits = pCoder->coder.numDataUnits;
   int numParityUnits = pCoder->coder.numParityUnits;
@@ -81,6 +82,32 @@ int encode(IsalEncoder* pCoder, unsigned char** dataUnits,
                          pCoder->gftbls, dataUnits, parityUnits);
 
   return 0;
+}
+
+static int ksal_encode(IsalEncoder *pCoder, unsigned char **dataUnits, unsigned char **parityUnits, int chunkSize)
+{
+  int numDataUnits = pCoder->coder.numDataUnits;
+  int numParityUnits = pCoder->coder.numParityUnits;
+  int i;
+
+  for (i = 0; i < numParityUnits; i++) {
+      memset(parityUnits[i], 0, chunkSize);
+  }
+
+  h_ec_ksal_encode(numDataUnits, numParityUnits, dataUnits, parityUnits, chunkSize);
+
+  return 0;
+}
+
+int encode(IsalEncoder *pCoder, unsigned char **dataUnits, unsigned char **parityUnits, int chunkSize)
+{
+  if (get_erasurecode_lib() == ERASURECODE_LIB_ISAL) {
+      return isal_encode(pCoder, dataUnits, parityUnits, chunkSize);
+  } else if (get_erasurecode_lib() == ERASURECODE_LIB_KSAL) {
+      return ksal_encode(pCoder, dataUnits, parityUnits, chunkSize);
+  } else {
+      return 0;
+  }
 }
 
 // Return 1 when diff, 0 otherwise
@@ -155,7 +182,7 @@ static int processErasures(IsalDecoder* pCoder, unsigned char** inputs,
   return 0;
 }
 
-int decode(IsalDecoder* pCoder, unsigned char** inputs,
+static int isal_decode(IsalDecoder* pCoder, unsigned char** inputs,
                   int* erasedIndexes, int numErased,
                    unsigned char** outputs, int chunkSize) {
   int numDataUnits = pCoder->coder.numDataUnits;
@@ -171,6 +198,85 @@ int decode(IsalDecoder* pCoder, unsigned char** inputs,
       pCoder->gftbls, pCoder->realInputs, outputs);
 
   return 0;
+}
+
+static int ksal_processErasures(
+    IsalDecoder *pCoder, unsigned char **inputs, int *erasedIndexes, int numErased, unsigned char **outputs, int chunkSize)
+{
+  int i, index;
+  int numDataUnits = pCoder->coder.numDataUnits;
+  int numParityUnits = pCoder->coder.numParityUnits;
+
+  clearDecoder(pCoder);
+  for (index = 0; index < numDataUnits + numParityUnits; index++) {
+    if (inputs[index] == NULL) {
+      pCoder->erasedIndexes[pCoder->numErased] = index;
+      pCoder->numErased++;
+    }
+  }
+
+  for (i = 0; i < numErased; i++) {
+    inputs[erasedIndexes[i]] = outputs[i];
+  }
+
+  // When more data is lost than the data that needs to be decoded, the blank data is temporarily filled.
+  pCoder->numNull = 0;
+  memset(pCoder->nullIndexes, 0, sizeof(pCoder->nullIndexes));
+
+  for (index = 0; index < numDataUnits + numParityUnits; index++) {
+    if (inputs[index] == NULL) {
+      pCoder->nullIndexes[pCoder->numNull] = index;
+      pCoder->numNull++;
+      inputs[index] = malloc(chunkSize);
+    }
+  }
+
+  return 0;
+}
+
+static void ksal_freeForDecode(IsalDecoder *pCoder, unsigned char **inputs)
+{
+  int i, index;
+  int numDataUnits = pCoder->coder.numDataUnits;
+  int numParityUnits = pCoder->coder.numParityUnits;
+
+  for (i = 0; i < pCoder->numNull; i++) {
+    index = pCoder->nullIndexes[i];
+    free(inputs[index]);
+  }
+
+  for (i = 0; i < pCoder->numErased; i++) {
+    index = pCoder->erasedIndexes[i];
+    inputs[index] = NULL;
+  }
+
+  return;
+}
+
+static int ksal_decode(IsalDecoder *pCoder, unsigned char **inputs, int *erasedIndexes, int numErased, unsigned char **outputs,
+    int chunkSize)
+{
+  int numDataUnits = pCoder->coder.numDataUnits;
+  int numParityUnits = pCoder->coder.numParityUnits;
+
+  ksal_processErasures(pCoder, inputs, erasedIndexes, numErased, outputs, chunkSize);
+  h_ec_ksal_decode(
+      numDataUnits, numParityUnits, inputs, inputs + numDataUnits, chunkSize, pCoder->erasedIndexes, pCoder->numErased);
+  ksal_freeForDecode(pCoder, inputs);
+
+  return 0;
+}
+
+int decode(IsalDecoder *pCoder, unsigned char **inputs, int *erasedIndexes, int numErased, unsigned char **outputs,
+    int chunkSize)
+{
+  if (get_erasurecode_lib() == ERASURECODE_LIB_ISAL) {
+    return isal_decode(pCoder, inputs, erasedIndexes, numErased, outputs, chunkSize);
+  } else if (get_erasurecode_lib() == ERASURECODE_LIB_KSAL) {
+    return ksal_decode(pCoder, inputs, erasedIndexes, numErased, outputs, chunkSize);
+  } else {
+    return 0;
+  }
 }
 
 // Clear variables used per decode call

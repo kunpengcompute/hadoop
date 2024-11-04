@@ -104,4 +104,8 @@ void h_ec_encode_data(int len, int k, int rows, unsigned char *gftbls,
 void h_ec_encode_data_update(int len, int k, int rows, int vec_i,
            unsigned char *gftbls, unsigned char *data, unsigned char **coding);
 
+void h_ec_ksal_encode(int numDataUnits, int numParityUnits, unsigned char **dataUnits, unsigned char **parityUnits, int chunkSize);
+void h_ec_ksal_decode(int numDataUnits, int numParityUnits, unsigned char **dataUnits, unsigned char **parityUnits,
+    int chunkSize, int *erasedIndexes, int numErased);
+
 #endif //_ERASURE_CODE_H_
