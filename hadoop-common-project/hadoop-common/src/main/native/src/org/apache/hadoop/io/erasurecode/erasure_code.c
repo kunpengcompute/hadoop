@@ -42,3 +42,31 @@ void h_ec_encode_data_update(int len, int k, int rows, int vec_i,
          unsigned char *gftbls, unsigned char *data, unsigned char **coding) {
   isaLoader->ec_encode_data_update(len, k, rows, vec_i, gftbls, data, coding);
 }
+
+void h_ec_ksal_encode(int numDataUnits, int numParityUnits, unsigned char **dataUnits, unsigned char **parityUnits, int chunkSize)
+{
+  struct HecParam hecParam;
+  hecParam.dataNum = numDataUnits;
+  hecParam.parityNum = numParityUnits;
+  hecParam.sectorSize = 1024;
+  hecParam.blockSize = chunkSize;
+  hecParam.version = 0;
+  ksaLoader->KsalEcEncode(dataUnits, parityUnits, &hecParam);
+}
+
+void h_ec_ksal_decode(int numDataUnits, int numParityUnits, unsigned char **dataUnits, unsigned char **parityUnits,
+    int chunkSize, int *erasedIndexes, int numErased)
+{
+  int i;
+  struct HecParam hecParam;
+  hecParam.dataNum = numDataUnits;
+  hecParam.parityNum = numParityUnits;
+  hecParam.sectorSize = 1024;
+  hecParam.blockSize = chunkSize;
+  hecParam.version = 0;
+  for (i = 0; i < numErased; i++) {
+      hecParam.targetColArray[i] = erasedIndexes[i];
+  }
+  hecParam.targetColNum = numErased;
+  ksaLoader->KsalEcDecode(dataUnits, parityUnits, &hecParam);
+}

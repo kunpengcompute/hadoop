@@ -159,6 +159,13 @@ else (ISAL_LIBRARY)
     ENDIF(REQUIRE_ISAL)
 endif (ISAL_LIBRARY)
 
+#Require KSAL
+find_library(KSAL_LIBRARY NAMES ksal PATHS /usr/lib64)
+if (KSAL_LIBRARY)
+    GET_FILENAME_COMPONENT(HADOOP_KSAL_LIBRARY ${KSAL_LIBRARY} NAME)
+    set(KSAL_INCLUDE_DIR "/usr/include/ksal")
+endif (ISAL_LIBRARY)
+
 # Build hardware CRC32 acceleration, if supported on the platform.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^i.86$" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64")
   set(BULK_CRC_ARCH_SOURCE_FIlE "${SRC}/util/bulk_crc32_x86.c")
@@ -235,6 +242,7 @@ include_directories(
     ${BZIP2_INCLUDE_DIR}
     ${SNAPPY_INCLUDE_DIR}
     ${ISAL_INCLUDE_DIR}
+    ${KSAL_INCLUDE_DIR}
     ${ZSTD_INCLUDE_DIR}
     ${OPENSSL_INCLUDE_DIR}
     ${SRC}/util

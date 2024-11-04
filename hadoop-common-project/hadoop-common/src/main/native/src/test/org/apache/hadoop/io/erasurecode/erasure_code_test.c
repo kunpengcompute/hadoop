@@ -119,7 +119,8 @@ int main(int argc, char *argv[]) {
   }
 
   dumpDecoder(pDecoder);
-  fprintf(stdout, "Successfully done, passed!\n\n");
+  // fprintf(stdout, "Successfully done, passed!\n\n");
+  fprintf(stdout, "Successfully %d done, passed!\n\n",get_erasurecode_lib());
 
   return 0;
 }
