@@ -1,0 +1,136 @@
+Subject: [PATCH] fix-hdfsThreadDestructor.patch
+---
+Index: hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/jni_helper.c
+===================================================================
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/jni_helper.c b/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/jni_helper.c
+--- a/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/jni_helper.c	(revision 17f4f317d8c70fcb839a2ea6a9f42b974802afbd)
++++ b/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/jni_helper.c	(revision d036f07f27961d12bc57103fa5088ea031ebceae)
+@@ -364,9 +364,12 @@
+  * every thread.  You must be holding the jvmMutex when you call this
+  * function.
+  *
++ * @param[out] threadCreatedFromJava whether the current thread was already
++ *                                  attached to the JVM
++ *
+  * @return          The JNIEnv on success; error code otherwise
+  */
+-static JNIEnv* getGlobalJNIEnv(void)
++static JNIEnv* getGlobalJNIEnv(bool* threadCreatedFromJava)
+ {
+     JavaVM* vmBuf[VM_BUF_LENGTH]; 
+     JNIEnv *env;
+@@ -392,6 +395,7 @@
+     }
+ 
+     if (noVMs == 0) {
++        *threadCreatedFromJava = false;
+         //Get the environment variables for initializing the JVM
+         hadoopClassPath = getenv("CLASSPATH");
+         if (hadoopClassPath == NULL) {
+@@ -466,10 +470,21 @@
+     else {
+         //Attach this thread to the VM
+         vm = vmBuf[0];
+-        rv = (*vm)->AttachCurrentThread(vm, (void*)&env, 0);
+-        if (rv != 0) {
+-            fprintf(stderr, "Call to AttachCurrentThread "
+-                    "failed with error: %d\n", rv);
++        rv = (*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_2);
++        if (rv == JNI_OK) {
++            *threadCreatedFromJava = true;
++            return env;
++        } else if (rv == JNI_EDETACHED) {
++            *threadCreatedFromJava = false;
++            rv = (*vm)->AttachCurrentThread(vm, (void**)&env, 0);
++            if (rv != 0) {
++                fprintf(stderr, "Call to AttachCurrentThread "
++                        "failed with error: %d\n", rv);
++                return NULL;
++            }
++        } else {
++            *threadCreatedFromJava = false;
++            fprintf(stderr, "Call to GetEnv failed with error: %d\n", rv);
+             return NULL;
+         }
+     }
+@@ -532,7 +547,7 @@
+     }
+     THREAD_LOCAL_STORAGE_SET_QUICK(state);
+ 
+-    state->env = getGlobalJNIEnv();
++    state->env = getGlobalJNIEnv(&state->threadCreatedFromJava);
+     mutexUnlock(&jvmMutex);
+     if (!state->env) {
+       goto fail;
+Index: hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/posix/thread_local_storage.c
+===================================================================
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/posix/thread_local_storage.c b/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/posix/thread_local_storage.c
+--- a/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/posix/thread_local_storage.c	(revision 17f4f317d8c70fcb839a2ea6a9f42b974802afbd)
++++ b/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/posix/thread_local_storage.c	(revision d036f07f27961d12bc57103fa5088ea031ebceae)
+@@ -39,21 +39,22 @@
+ {
+   JavaVM *vm;
+   struct ThreadLocalState *state = (struct ThreadLocalState*)v;
+-  JNIEnv *env = state->env;;
++  JNIEnv *env = state->env;
+   jint ret;
+-
+-  /* Detach the current thread from the JVM */
+-  /* Found created Java */
+   jsize vmNum = 0;
+-  auto res = JNI_GetCreatedJavaVMs(&vm, 1, &vmNum);
+-  if (res != JNI_OK || vmNum <= 0) {
+-    fprintf(stderr, "JVM exits\n");
+-    return;
+-  }
+-  ret = (*vm)->DetachCurrentThread(vm);
+-
+-  if (ret != JNI_OK) {
+-    fprintf(stderr, "hdfsThreadDestructor: Unable to detach thread from the JVM. Error code: %d\n", ret);
++
++  /* Detach only threads that libhdfs attached to the JVM. */
++  if (!state->threadCreatedFromJava && env) {
++    ret = JNI_GetCreatedJavaVMs(&vm, 1, &vmNum);
++    if (ret != JNI_OK || vmNum <= 0) {
++      fprintf(stderr, "JVM exits\n");
++    } else {
++      ret = (*vm)->DetachCurrentThread(vm);
++      if (ret != JNI_OK) {
++        fprintf(stderr, "hdfsThreadDestructor: Unable to detach thread from "
++          "the JVM. Error code: %d\n", ret);
++      }
++    }
+   }
+ 
+   /* Free exception strings */
+@@ -73,6 +74,8 @@
+       "threadLocalStorageSet: OOM - Unable to allocate thread local state\n");
+     return NULL;
+   }
++  state->threadCreatedFromJava = false;
++  state->env = NULL;
+   state->lastExceptionStackTrace = NULL;
+   state->lastExceptionRootCause = NULL;
+   return state;
+Index: hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/thread_local_storage.h
+===================================================================
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/thread_local_storage.h b/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/thread_local_storage.h
+--- a/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/thread_local_storage.h	(revision 17f4f317d8c70fcb839a2ea6a9f42b974802afbd)
++++ b/hadoop-hdfs-project/hadoop-hdfs-native-client/src/main/native/libhdfs/os/thread_local_storage.h	(revision d036f07f27961d12bc57103fa5088ea031ebceae)
+@@ -27,6 +27,7 @@
+  */
+ 
+ #include <jni.h>
++#include <stdbool.h>
+ 
+ /*
+  * Most operating systems support the more efficient __thread construct, which
+@@ -52,6 +53,8 @@
+ #endif
+ 
+ struct ThreadLocalState {
++  /* Whether this thread was already attached to the JVM. */
++  bool threadCreatedFromJava;
+   /* The JNIEnv associated with the current thread */
+   JNIEnv *env;
+   /* The last exception stack trace that occured on this thread */
