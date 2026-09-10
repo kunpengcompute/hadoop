@@ -1,0 +1,460 @@
+From 4d3d25cb8a4db3b6a43015bb74dca725eecdf3b6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E5=8C=85=E6=97=BB=E6=99=A8?= <minchen_bao_dev@163.com>
+Date: Mon, 4 Nov 2024 19:28:59 +0800
+Subject: [PATCH] ksal
+
+---
+ .../hadoop-common/src/CMakeLists.txt          |   8 ++
+ .../hadoop-common/src/config.h.cmake          |   1 +
+ .../hadoop/io/erasurecode/erasure_code.c      |  28 +++++
+ .../hadoop/io/erasurecode/erasure_code.h      |   4 +
+ .../hadoop/io/erasurecode/erasure_coder.c     | 110 +++++++++++++++++-
+ .../hadoop/io/erasurecode/erasure_coder.h     |   2 +
+ .../apache/hadoop/io/erasurecode/isal_load.c  |  72 +++++++++++-
+ .../apache/hadoop/io/erasurecode/isal_load.h  |  39 +++++++
+ .../hadoop/io/erasurecode/erasure_code_test.c |   3 +-
+ 9 files changed, 263 insertions(+), 4 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/CMakeLists.txt b/hadoop-common-project/hadoop-common/src/CMakeLists.txt
+index b9287c0f4b5..12307d3e0b2 100644
+--- a/hadoop-common-project/hadoop-common/src/CMakeLists.txt
++++ b/hadoop-common-project/hadoop-common/src/CMakeLists.txt
+@@ -159,6 +159,13 @@ else (ISAL_LIBRARY)
+     ENDIF(REQUIRE_ISAL)
+ endif (ISAL_LIBRARY)
+ 
++#Require KSAL
++find_library(KSAL_LIBRARY NAMES ksal PATHS /usr/lib64)
++if (KSAL_LIBRARY)
++    GET_FILENAME_COMPONENT(HADOOP_KSAL_LIBRARY ${KSAL_LIBRARY} NAME)
++    set(KSAL_INCLUDE_DIR "/usr/include/ksal")
++endif (ISAL_LIBRARY)
++
+ # Build hardware CRC32 acceleration, if supported on the platform.
+ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^i.86$" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64")
+   set(BULK_CRC_ARCH_SOURCE_FIlE "${SRC}/util/bulk_crc32_x86.c")
+@@ -235,6 +242,7 @@ include_directories(
+     ${BZIP2_INCLUDE_DIR}
+     ${SNAPPY_INCLUDE_DIR}
+     ${ISAL_INCLUDE_DIR}
++    ${KSAL_INCLUDE_DIR}
+     ${ZSTD_INCLUDE_DIR}
+     ${OPENSSL_INCLUDE_DIR}
+     ${SRC}/util
+diff --git a/hadoop-common-project/hadoop-common/src/config.h.cmake b/hadoop-common-project/hadoop-common/src/config.h.cmake
+index 40aa467373c..269ddf6d2a0 100644
+--- a/hadoop-common-project/hadoop-common/src/config.h.cmake
++++ b/hadoop-common-project/hadoop-common/src/config.h.cmake
+@@ -24,6 +24,7 @@
+ #cmakedefine HADOOP_ZSTD_LIBRARY "@HADOOP_ZSTD_LIBRARY@"
+ #cmakedefine HADOOP_OPENSSL_LIBRARY "@HADOOP_OPENSSL_LIBRARY@"
+ #cmakedefine HADOOP_ISAL_LIBRARY "@HADOOP_ISAL_LIBRARY@"
++#cmakedefine HADOOP_KSAL_LIBRARY "@HADOOP_KSAL_LIBRARY@"
+ #cmakedefine HAVE_SYNC_FILE_RANGE
+ #cmakedefine HAVE_POSIX_FADVISE
+ 
+diff --git a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_code.c b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_code.c
+index 125068877be..8d585e6a644 100644
+--- a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_code.c
++++ b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_code.c
+@@ -41,4 +41,32 @@ void h_ec_encode_data(int len, int k, int rows, unsigned char *gftbls,
+ void h_ec_encode_data_update(int len, int k, int rows, int vec_i,
+          unsigned char *gftbls, unsigned char *data, unsigned char **coding) {
+   isaLoader->ec_encode_data_update(len, k, rows, vec_i, gftbls, data, coding);
++}
++
++void h_ec_ksal_encode(int numDataUnits, int numParityUnits, unsigned char **dataUnits, unsigned char **parityUnits, int chunkSize)
++{
++  struct HecParam hecParam;
++  hecParam.dataNum = numDataUnits;
++  hecParam.parityNum = numParityUnits;
++  hecParam.sectorSize = 1024;
++  hecParam.blockSize = chunkSize;
++  hecParam.version = 0;
++  ksaLoader->KsalEcEncode(dataUnits, parityUnits, &hecParam);
++}
++
++void h_ec_ksal_decode(int numDataUnits, int numParityUnits, unsigned char **dataUnits, unsigned char **parityUnits,
++    int chunkSize, int *erasedIndexes, int numErased)
++{
++  int i;
++  struct HecParam hecParam;
++  hecParam.dataNum = numDataUnits;
++  hecParam.parityNum = numParityUnits;
++  hecParam.sectorSize = 1024;
++  hecParam.blockSize = chunkSize;
++  hecParam.version = 0;
++  for (i = 0; i < numErased; i++) {
++      hecParam.targetColArray[i] = erasedIndexes[i];
++  }
++  hecParam.targetColNum = numErased;
++  ksaLoader->KsalEcDecode(dataUnits, parityUnits, &hecParam);
+ }
+\ No newline at end of file
+diff --git a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_code.h b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_code.h
+index a6cfd587900..034e6c0e5b2 100644
+--- a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_code.h
++++ b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_code.h
+@@ -104,4 +104,8 @@ void h_ec_encode_data(int len, int k, int rows, unsigned char *gftbls,
+ void h_ec_encode_data_update(int len, int k, int rows, int vec_i,
+            unsigned char *gftbls, unsigned char *data, unsigned char **coding);
+ 
++void h_ec_ksal_encode(int numDataUnits, int numParityUnits, unsigned char **dataUnits, unsigned char **parityUnits, int chunkSize);
++void h_ec_ksal_decode(int numDataUnits, int numParityUnits, unsigned char **dataUnits, unsigned char **parityUnits,
++    int chunkSize, int *erasedIndexes, int numErased);
++
+ #endif //_ERASURE_CODE_H_
+diff --git a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_coder.c b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_coder.c
+index b2d856b6f88..cf91293dadf 100644
+--- a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_coder.c
++++ b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_coder.c
+@@ -19,6 +19,7 @@
+ #include "erasure_code.h"
+ #include "gf_util.h"
+ #include "erasure_coder.h"
++#include "isal_load.h"
+ #include "dump.h"
+ 
+ #include <stdio.h>
+@@ -67,7 +68,7 @@ void initDecoder(IsalDecoder* pCoder, int numDataUnits,
+   initEncodeMatrix(numDataUnits, numParityUnits, pCoder->encodeMatrix);
+ }
+ 
+-int encode(IsalEncoder* pCoder, unsigned char** dataUnits,
++static int isal_encode(IsalEncoder* pCoder, unsigned char** dataUnits,
+     unsigned char** parityUnits, int chunkSize) {
+   int numDataUnits = pCoder->coder.numDataUnits;
+   int numParityUnits = pCoder->coder.numParityUnits;
+@@ -83,6 +84,32 @@ int encode(IsalEncoder* pCoder, unsigned char** dataUnits,
+   return 0;
+ }
+ 
++static int ksal_encode(IsalEncoder *pCoder, unsigned char **dataUnits, unsigned char **parityUnits, int chunkSize)
++{
++  int numDataUnits = pCoder->coder.numDataUnits;
++  int numParityUnits = pCoder->coder.numParityUnits;
++  int i;
++
++  for (i = 0; i < numParityUnits; i++) {
++      memset(parityUnits[i], 0, chunkSize);
++  }
++
++  h_ec_ksal_encode(numDataUnits, numParityUnits, dataUnits, parityUnits, chunkSize);
++
++  return 0;
++}
++
++int encode(IsalEncoder *pCoder, unsigned char **dataUnits, unsigned char **parityUnits, int chunkSize)
++{
++  if (get_erasurecode_lib() == ERASURECODE_LIB_ISAL) {
++      return isal_encode(pCoder, dataUnits, parityUnits, chunkSize);
++  } else if (get_erasurecode_lib() == ERASURECODE_LIB_KSAL) {
++      return ksal_encode(pCoder, dataUnits, parityUnits, chunkSize);
++  } else {
++      return 0;
++  }
++}
++
+ // Return 1 when diff, 0 otherwise
+ static int compare(int* arr1, int len1, int* arr2, int len2) {
+   int i;
+@@ -155,7 +182,7 @@ static int processErasures(IsalDecoder* pCoder, unsigned char** inputs,
+   return 0;
+ }
+ 
+-int decode(IsalDecoder* pCoder, unsigned char** inputs,
++static int isal_decode(IsalDecoder* pCoder, unsigned char** inputs,
+                   int* erasedIndexes, int numErased,
+                    unsigned char** outputs, int chunkSize) {
+   int numDataUnits = pCoder->coder.numDataUnits;
+@@ -173,6 +200,85 @@ int decode(IsalDecoder* pCoder, unsigned char** inputs,
+   return 0;
+ }
+ 
++static int ksal_processErasures(
++    IsalDecoder *pCoder, unsigned char **inputs, int *erasedIndexes, int numErased, unsigned char **outputs, int chunkSize)
++{
++  int i, index;
++  int numDataUnits = pCoder->coder.numDataUnits;
++  int numParityUnits = pCoder->coder.numParityUnits;
++
++  clearDecoder(pCoder);
++  for (index = 0; index < numDataUnits + numParityUnits; index++) {
++    if (inputs[index] == NULL) {
++      pCoder->erasedIndexes[pCoder->numErased] = index;
++      pCoder->numErased++;
++    }
++  }
++
++  for (i = 0; i < numErased; i++) {
++    inputs[erasedIndexes[i]] = outputs[i];
++  }
++
++  // When more data is lost than the data that needs to be decoded, the blank data is temporarily filled.
++  pCoder->numNull = 0;
++  memset(pCoder->nullIndexes, 0, sizeof(pCoder->nullIndexes));
++
++  for (index = 0; index < numDataUnits + numParityUnits; index++) {
++    if (inputs[index] == NULL) {
++      pCoder->nullIndexes[pCoder->numNull] = index;
++      pCoder->numNull++;
++      inputs[index] = malloc(chunkSize);
++    }
++  }
++
++  return 0;
++}
++
++static void ksal_freeForDecode(IsalDecoder *pCoder, unsigned char **inputs)
++{
++  int i, index;
++  int numDataUnits = pCoder->coder.numDataUnits;
++  int numParityUnits = pCoder->coder.numParityUnits;
++
++  for (i = 0; i < pCoder->numNull; i++) {
++    index = pCoder->nullIndexes[i];
++    free(inputs[index]);
++  }
++
++  for (i = 0; i < pCoder->numErased; i++) {
++    index = pCoder->erasedIndexes[i];
++    inputs[index] = NULL;
++  }
++
++  return;
++}
++
++static int ksal_decode(IsalDecoder *pCoder, unsigned char **inputs, int *erasedIndexes, int numErased, unsigned char **outputs,
++    int chunkSize)
++{
++  int numDataUnits = pCoder->coder.numDataUnits;
++  int numParityUnits = pCoder->coder.numParityUnits;
++
++  ksal_processErasures(pCoder, inputs, erasedIndexes, numErased, outputs, chunkSize);
++  h_ec_ksal_decode(
++      numDataUnits, numParityUnits, inputs, inputs + numDataUnits, chunkSize, pCoder->erasedIndexes, pCoder->numErased);
++  ksal_freeForDecode(pCoder, inputs);
++
++  return 0;
++}
++
++int decode(IsalDecoder *pCoder, unsigned char **inputs, int *erasedIndexes, int numErased, unsigned char **outputs,
++    int chunkSize)
++{
++  if (get_erasurecode_lib() == ERASURECODE_LIB_ISAL) {
++    return isal_decode(pCoder, inputs, erasedIndexes, numErased, outputs, chunkSize);
++  } else if (get_erasurecode_lib() == ERASURECODE_LIB_KSAL) {
++    return ksal_decode(pCoder, inputs, erasedIndexes, numErased, outputs, chunkSize);
++  } else {
++    return 0;
++  }
++}
++
+ // Clear variables used per decode call
+ void clearDecoder(IsalDecoder* decoder) {
+   decoder->numErasedDataUnits = 0;
+diff --git a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_coder.h b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_coder.h
+index 8f5bf8a3ca7..208349cf93d 100644
+--- a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_coder.h
++++ b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/erasure_coder.h
+@@ -62,6 +62,8 @@ typedef struct _IsalDecoder {
+   unsigned char erasureFlags[MMAX];
+   int erasedIndexes[MMAX];
+   int numErased;
++  int nullIndexes[MMAX];
++  int numNull;
+   int numErasedDataUnits;
+   unsigned char* realInputs[MMAX];
+ } IsalDecoder;
+diff --git a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/isal_load.c b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/isal_load.c
+index 26d8e1a6028..247ff6d16f5 100644
+--- a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/isal_load.c
++++ b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/isal_load.c
+@@ -37,6 +37,13 @@
+ #endif
+ 
+ IsaLibLoader* isaLoader;
++KsaLibLoader* ksaLoader;
++enum erasurecode_lib_type g_erasurecode_lib_type;
++
++#define PRINT_MACRO_HELPER(x)   #x
++#define PRINT_MACRO(x)   #x "=" PRINT_MACRO_HELPER(x)
++#pragma message(PRINT_MACRO(HADOOP_ISAL_LIBRARY))
++#pragma message(PRINT_MACRO(HADOOP_KSAL_LIBRARY))
+ 
+ /**
+  *  isal_load.c
+@@ -76,7 +83,14 @@ static const char* load_functions() {
+   return NULL;
+ }
+ 
+-void load_erasurecode_lib(char* err, size_t err_len) {
++static const char* load_ksal_functions() {
++  EC_LOAD_KSAL_DYNAMIC_SYMBOL((ksaLoader->KsalEcEncode), "KsalEcEncode");
++  EC_LOAD_KSAL_DYNAMIC_SYMBOL((ksaLoader->KsalEcDecode), "KsalEcDecode");
++
++  return NULL;
++}
++
++void load_erasurecode_isal_lib(char* err, size_t err_len) {
+   const char* errMsg;
+   const char* library = NULL;
+ #ifdef UNIX
+@@ -135,6 +149,62 @@ void load_erasurecode_lib(char* err, size_t err_len) {
+   isaLoader->libname = strdup(library);
+ }
+ 
++void load_erasurecode_ksal_lib(char *err, size_t err_len)
++{
++  const char *errMsg;
++  const char *library = NULL;
++  Dl_info dl_info;
++
++  err[0] = '\0';
++
++  if (ksaLoader != NULL) {
++    return;
++  }
++  ksaLoader = calloc(1, sizeof(KsaLibLoader));
++  memset(ksaLoader, 0, sizeof(KsaLibLoader));
++
++  // Load Kunpeng KSAL
++  ksaLoader->libec = dlopen(HADOOP_KSAL_LIBRARY, RTLD_LAZY | RTLD_GLOBAL);
++  if (ksaLoader->libec == NULL) {
++    snprintf(err, err_len, "Failed to load %s (%s)", HADOOP_KSAL_LIBRARY, dlerror());
++    return;
++  }
++  // Clear any existing error
++  dlerror();
++
++  errMsg = load_ksal_functions(ksaLoader->libec);
++  if (errMsg != NULL) {
++    snprintf(err, err_len, "Loading functions from KSAL failed: %s", errMsg);
++  }
++
++  if (dladdr(ksaLoader->KsalEcEncode, &dl_info)) {
++    library = dl_info.dli_fname;
++  }
++
++  if (library == NULL) {
++    library = HADOOP_KSAL_LIBRARY;
++  }
++
++  ksaLoader->libname = strdup(library);
++  set_erasurecode_lib(ERASURECODE_LIB_KSAL);
++}
++
++void load_erasurecode_lib(char* err, size_t err_len)
++{
++  load_erasurecode_isal_lib(err, err_len);
++  load_erasurecode_ksal_lib(err, err_len);
++}
++
++void set_erasurecode_lib(enum erasurecode_lib_type type)
++{
++  g_erasurecode_lib_type = type;
++}
++
++enum erasurecode_lib_type get_erasurecode_lib(void)
++{
++  return g_erasurecode_lib_type;
++}
++
+ int build_support_erasurecode() {
+ #ifdef HADOOP_ISAL_LIBRARY
+   return 1;
+diff --git a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/isal_load.h b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/isal_load.h
+index c46a5318fe1..73f1a450d6a 100644
+--- a/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/isal_load.h
++++ b/hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/erasurecode/isal_load.h
+@@ -38,6 +38,12 @@
+ #ifndef _ISAL_LOAD_H_
+ #define _ISAL_LOAD_H_
+ 
++#include <ksal_erasure_code.h>
++enum erasurecode_lib_type {
++	ERASURECODE_LIB_ISAL = 0,
++	ERASURECODE_LIB_KSAL = 1,
++	ERASURECODE_LIB_LAST
++};
+ 
+ #ifdef UNIX
+ // For gf_util.h
+@@ -54,6 +60,8 @@ typedef void (*__d_ec_encode_data)(int, int, int, unsigned char*,
+                                           unsigned char**, unsigned char**);
+ typedef void (*__d_ec_encode_data_update)(int, int, int, int, unsigned char*,
+                                              unsigned char*, unsigned char**);
++typedef void (*__KsalEcEncode)(uint8_t **, uint8_t **, struct HecParam *);
++typedef void (*__KsalEcDecode)(uint8_t **, uint8_t **, struct HecParam *);
+ #endif
+ 
+ #ifdef WINDOWS
+@@ -91,7 +99,18 @@ typedef struct __IsaLibLoader {
+   __d_ec_encode_data_update ec_encode_data_update;
+ } IsaLibLoader;
+ 
++typedef struct __KsaLibLoader {
++  // The loaded library handle
++  void* libec;
++  char* libname;
++
++  __KsalEcEncode KsalEcEncode;
++  __KsalEcDecode KsalEcDecode;
++} KsaLibLoader;
++
+ extern IsaLibLoader* isaLoader;
++extern KsaLibLoader* ksaLoader;
++extern enum erasurecode_lib_type g_erasurecode_lib_type;
+ 
+ /**
+  * A helper function to dlsym a 'symbol' from a given library-handle.
+@@ -113,6 +132,11 @@ void *myDlsym(void *handle, const char *symbol) {
+ 
+ #endif
+ 
++#define EC_LOAD_KSAL_DYNAMIC_SYMBOL(func_ptr, symbol) \
++  if ((func_ptr = myDlsym(ksaLoader->libec, symbol)) == NULL) { \
++    return "Failed to load symbol" symbol; \
++  }
++
+ #ifdef WINDOWS
+ 
+ 
+@@ -142,4 +166,19 @@ int build_support_erasurecode();
+  */
+ void load_erasurecode_lib(char* err, size_t err_len);
+ 
++/**
++ * 设置使用的纠删码库类型
++ * @param type 纠删码库类型枚举
++ *
++ * 此函数用于设置使用的纠删码库类型，可以根据需要选择不同的纠删码库。
++ */
++void set_erasurecode_lib(enum erasurecode_lib_type type);
++
++/**
++ * 获取当前使用的纠删码库类型
++ *
++ * @return 返回当前使用的纠删码库类型
++ */
++enum erasurecode_lib_type get_erasurecode_lib(void);
++
+ #endif //_ISAL_LOAD_H_
+\ No newline at end of file
+diff --git a/hadoop-common-project/hadoop-common/src/main/native/src/test/org/apache/hadoop/io/erasurecode/erasure_code_test.c b/hadoop-common-project/hadoop-common/src/main/native/src/test/org/apache/hadoop/io/erasurecode/erasure_code_test.c
+index 331bb219b7f..cc51fb75c64 100644
+--- a/hadoop-common-project/hadoop-common/src/main/native/src/test/org/apache/hadoop/io/erasurecode/erasure_code_test.c
++++ b/hadoop-common-project/hadoop-common/src/main/native/src/test/org/apache/hadoop/io/erasurecode/erasure_code_test.c
+@@ -119,7 +119,8 @@ int main(int argc, char *argv[]) {
+   }
+ 
+   dumpDecoder(pDecoder);
+-  fprintf(stdout, "Successfully done, passed!\n\n");
++  // fprintf(stdout, "Successfully done, passed!\n\n");
++  fprintf(stdout, "Successfully %d done, passed!\n\n",get_erasurecode_lib());
+ 
+   return 0;
+ }
+-- 
+2.47.0.windows.1
+

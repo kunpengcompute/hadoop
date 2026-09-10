@@ -1,0 +1,61 @@
+From 0717110dd94de064d6e57d32f9e1913d0d701326 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E5=8C=85=E6=97=BB=E6=99=A8?= <minchen_bao_dev@163.com>
+Date: Mon, 4 Nov 2024 19:22:50 +0800
+Subject: [PATCH] testDFSIO
+
+---
+ .../java/org/apache/hadoop/fs/TestDFSIO.java  | 31 ++++++++++++-------
+ 1 file changed, 20 insertions(+), 11 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/fs/TestDFSIO.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/fs/TestDFSIO.java
+index 10709bec0fe..8b01fe3248b 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/fs/TestDFSIO.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/fs/TestDFSIO.java
+@@ -28,6 +28,8 @@
+ import java.io.InputStreamReader;
+ import java.io.OutputStream;
+ import java.io.PrintStream;
++import java.nio.file.Files;
++import java.nio.file.Paths;
+ import java.text.DecimalFormat;
+ import java.util.Collection;
+ import java.util.Date;
+@@ -430,17 +432,24 @@ public Long doIO(Reporter reporter,
+                        String name, 
+                        long totalSize // in bytes
+                      ) throws IOException {
+-      OutputStream out = (OutputStream)this.stream;
+-      // write to the file
+-      long nrRemaining;
+-      for (nrRemaining = totalSize; nrRemaining > 0; nrRemaining -= bufferSize) {
+-        int curSize = (bufferSize < nrRemaining) ? bufferSize : (int)nrRemaining;
+-        out.write(buffer, 0, curSize);
+-        reporter.setStatus("writing " + name + "@" + 
+-                           (totalSize - nrRemaining) + "/" + totalSize 
+-                           + " ::host = " + hostName);
+-      }
+-      return Long.valueOf(totalSize);
++	    OutputStream out = (OutputStream) this.stream;
++		// write to the file
++		long nrRemaining;
++		byte[] ioTestData = getIoTestDataFromLocal();
++		long delta = Math.min(totalSize, ioTestData.length);
++		for (nrRemaining = totalSize; nrRemaining > 0; nrRemaining -= delta) {
++			long curSize = (delta < nrRemaining) ? delta : (int) nrRemaining;
++			out.write(ioTestData, 0, (int) curSize);
++			reporter.setStatus("writing " + name + "@" +
++				(totalSize - nrRemaining) + "/" + totalSize
++				+ " ::host = " + hostName);
++       }
++       return Long.valueOf(totalSize);
++    }
++
++    private byte[] getIoTestDataFromLocal() throws IOException {
++       java.nio.file.Path path = Paths.get("/usr/local/hadoop/testFiles/test_io_file");
++       return Files.readAllBytes(path);
+     }
+   }
+ 
+-- 
+2.47.0.windows.1
+
